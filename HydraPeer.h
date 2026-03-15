@@ -153,7 +153,7 @@ namespace HydraIPC
 			return m_pShared && m_pShared->isActive;
 		}
 
-		// Join the hive. First peer creates the shared memorym subsequent peers attach to the existing mapping. Returns true on success.
+		// Join the hive. First peer creates the shared memory subsequent peers attach to the existing mapping. Returns true on success.
 		inline bool Join(const char* szPeerName, uint32_t uProcessId)
 		{
 			if (m_pShared)
@@ -321,7 +321,23 @@ namespace HydraIPC
 			return m_pShared && m_nMySlot >= 0 && m_pShared->leaderSlot == m_nMySlot;
 		}
 
-		// Atomically claim leadership. Returns true if we are now the leader.
+		// Try atomically claim leadership. Returns true if we are now the leader.
+		inline bool TryClaimLeadership(int32_t nOriginalLeader)
+		{
+			if (!m_pShared || m_nMySlot < 0)
+			{
+				return false;
+			}
+
+			if (InterlockedCompareExchange(&m_pShared->leaderSlot, m_nMySlot, -1) == -1)
+			{
+				return true;
+			}
+
+			return InterlockedCompareExchange(&m_pShared->leaderSlot, m_nMySlot, nOriginalLeader) == nOriginalLeader;
+		}
+
+		// Atomically force leadership claim. Returns true if we are now the leader.
 		inline bool ClaimLeadership()
 		{
 			if (!m_pShared || m_nMySlot < 0)
@@ -355,6 +371,12 @@ namespace HydraIPC
 			}
 
 			int32_t nLeader = m_pShared->leaderSlot;
+			if (nLeader == -1)
+			{
+				TryClaimLeadership(nLeader);
+				return;
+			}
+
 			if (nLeader < 0 || nLeader >= (int32_t)MAX_PEERS || nLeader == m_nMySlot)
 			{
 				return;
@@ -363,7 +385,7 @@ namespace HydraIPC
 			PeerSlot& slot = m_pShared->peerSlots[nLeader];
 			if (slot.connectState != 1)
 			{
-				ClaimLeadership();
+				TryClaimLeadership(nLeader);
 				return;
 			}
 
@@ -371,7 +393,7 @@ namespace HydraIPC
 			if (!hProc)
 			{
 				InterlockedExchange(&slot.connectState, 0);
-				ClaimLeadership();
+				TryClaimLeadership(nLeader);
 				return;
 			}
 
@@ -381,7 +403,7 @@ namespace HydraIPC
 			if (dwResult != WAIT_TIMEOUT)
 			{
 				InterlockedExchange(&slot.connectState, 0);
-				ClaimLeadership();
+				TryClaimLeadership(nLeader);
 			}
 		}
 
