@@ -11,6 +11,10 @@
 #include <cstring>
 #include <Windows.h>
 
+#ifndef HYDRA_IPC_SHARED_MEMORY_NAME
+#define HYDRA_IPC_SHARED_MEMORY_NAME "DIA4A_HydraIPC_SharedMem"
+#endif
+
 namespace HydraIPC
 {
 	using PeerMask = uint64_t;
@@ -21,7 +25,7 @@ namespace HydraIPC
 	constexpr uint32_t SHARED_MEMORY_MAGIC  = 'D4AM';
 	constexpr uint32_t SHARED_MEMORY_VERSION = 3;
 
-	inline const char* SharedMemoryName() { return "DIA4A_HydraIPC_SharedMem"; }
+	inline const char* SharedMemoryName() { return HYDRA_IPC_SHARED_MEMORY_NAME; }
 
 	constexpr PeerMask TargetAll = ~PeerMask(0);
 
