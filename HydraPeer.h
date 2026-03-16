@@ -14,7 +14,8 @@
 
 namespace HydraIPC
 {
-	namespace Peer
+	template <typename TLeaderState, typename TPeerState>
+	struct Peer
 	{
 		// Raw handler: receives sender slot, raw payload pointer, and payload size.
 		using RawHandler = std::function<void(uint32_t uSenderSlot, const void* pPayload, uint32_t uPayloadSize)>;
@@ -22,20 +23,20 @@ namespace HydraIPC
 		// Default handler: also receives the command type for dispatch.
 		using DefaultHandler = std::function<void(uint32_t uSenderSlot, uint32_t uCommandType, const void* pPayload, uint32_t uPayloadSize)>;
 
-		inline HANDLE              m_hFileMapping = NULL;
-		inline SharedMemoryLayout* m_pShared = nullptr;
-		inline int32_t             m_nMySlot = -1;
-		inline volatile bool       m_bAPCRunning = false;
-		inline HANDLE              m_hAPCThread = NULL;
-		inline uint32_t            m_nReadIndex = 0;
-		inline bool                m_bCreatedSharedMemory = false;
-		inline HANDLE              m_hPeerThreads[MAX_PEERS] = {};
+		HANDLE              m_hFileMapping = NULL;
+		SharedMemoryLayout<TLeaderState, TPeerState>* m_pShared = nullptr;
+		int32_t             m_nMySlot = -1;
+		volatile bool       m_bAPCRunning = false;
+		HANDLE              m_hAPCThread = NULL;
+		uint32_t            m_nReadIndex = 0;
+		bool                m_bCreatedSharedMemory = false;
+		HANDLE              m_hPeerThreads[MAX_PEERS] = {};
 
 		// NOTE: Register all handlers BEFORE calling Join() or while the APC thread is paused. The APC thread reads this map without locking.
-		inline std::unordered_map<uint32_t, RawHandler> m_handlers;
-		inline DefaultHandler m_defaultHandler;
+		std::unordered_map<uint32_t, RawHandler> m_handlers;
+		DefaultHandler m_defaultHandler;
 
-		inline PeerSlot* GetMySlot()
+		inline PeerSlot<TPeerState>* GetMySlot()
 		{
 			if (!m_pShared || m_nMySlot < 0)
 			{
@@ -83,18 +84,19 @@ namespace HydraIPC
 			}
 		}
 
-		inline DWORD WINAPI APCThreadProc(LPVOID)
+		static inline DWORD WINAPI APCThreadProc(LPVOID lpParameter)
 		{
-			while (m_bAPCRunning)
+			Peer* pThis = reinterpret_cast<Peer*>(lpParameter);
+			while (pThis->m_bAPCRunning)
 			{
 				SleepEx(100, TRUE);
 
-				if (!m_bAPCRunning)
+				if (!pThis->m_bAPCRunning)
 				{
 					break;
 				}
 
-				ProcessPendingCommands();
+				pThis->ProcessPendingCommands();
 			}
 			return 0;
 		}
@@ -118,7 +120,7 @@ namespace HydraIPC
 					continue;
 				}
 
-				PeerSlot& slot = m_pShared->peerSlots[i];
+				auto& slot = m_pShared->peerSlots[i];
 				if (slot.connectState != 1 || !slot.apcCallbackAddr)
 				{
 					continue;
@@ -163,7 +165,7 @@ namespace HydraIPC
 
 			m_hFileMapping = CreateFileMappingA(
 				INVALID_HANDLE_VALUE, NULL, PAGE_READWRITE,
-				0, sizeof(SharedMemoryLayout), SharedMemoryName()
+				0, sizeof(SharedMemoryLayout<TLeaderState, TPeerState>), SharedMemoryName()
 			);
 			if (!m_hFileMapping)
 			{
@@ -172,9 +174,9 @@ namespace HydraIPC
 
 			m_bCreatedSharedMemory = (GetLastError() != ERROR_ALREADY_EXISTS);
 
-			m_pShared = (SharedMemoryLayout*)MapViewOfFile(
+			m_pShared = (SharedMemoryLayout<TLeaderState, TPeerState>*)MapViewOfFile(
 				m_hFileMapping, FILE_MAP_ALL_ACCESS,
-				0, 0, sizeof(SharedMemoryLayout)
+				0, 0, sizeof(SharedMemoryLayout<TLeaderState, TPeerState>)
 			);
 			if (!m_pShared)
 			{
@@ -185,7 +187,7 @@ namespace HydraIPC
 
 			if (m_bCreatedSharedMemory)
 			{
-				memset(m_pShared, 0, sizeof(SharedMemoryLayout));
+				memset(m_pShared, 0, sizeof(SharedMemoryLayout<TLeaderState, TPeerState>));
 				m_pShared->magic = SHARED_MEMORY_MAGIC;
 				m_pShared->version = SHARED_MEMORY_VERSION;
 				InterlockedExchange(&m_pShared->leaderSlot, -1);
@@ -205,7 +207,7 @@ namespace HydraIPC
 			}
 
 			m_bAPCRunning = true;
-			m_hAPCThread = CreateThread(NULL, 0, APCThreadProc, NULL, 0, NULL);
+			m_hAPCThread = CreateThread(NULL, 0, APCThreadProc, reinterpret_cast<LPVOID>(this), 0, NULL);
 			if (!m_hAPCThread)
 			{
 				m_bAPCRunning = false;
@@ -242,16 +244,16 @@ namespace HydraIPC
 				return false;
 			}
 
-			PeerSlot& slot = m_pShared->peerSlots[m_nMySlot];
+			auto& slot = m_pShared->peerSlots[m_nMySlot];
 			slot.processId = uProcessId;
 			slot.apcThreadId = GetThreadId(m_hAPCThread);
 			slot.apcCallbackAddr = (uintptr_t)&APCCallback;
-			slot.speed = 0.f;
-			slot.objectId = -1;
-			slot.worldId = 0;
+			slot.state.speed = 0.f;
+			slot.state.objectId = -1;
+			slot.state.worldId = 0;
 			strncpy_s(slot.name, szPeerName, sizeof(slot.name) - 1);
-			InterlockedExchange(&slot.isSlowed, 0);
-			InterlockedExchange(&slot.isConnectedInGame, 0);
+			InterlockedExchange(&slot.state.isSlowed, 0);
+			InterlockedExchange(&slot.state.isConnectedInGame, 0);
 
 			if (m_bCreatedSharedMemory)
 			{
@@ -382,7 +384,7 @@ namespace HydraIPC
 				return;
 			}
 
-			PeerSlot& slot = m_pShared->peerSlots[nLeader];
+			auto& slot = m_pShared->peerSlots[nLeader];
 			if (slot.connectState != 1)
 			{
 				TryClaimLeadership(nLeader);
@@ -428,13 +430,13 @@ namespace HydraIPC
 		}
 
 		// Returns a writable reference. Must be called between Begin/EndStateUpdate.
-		inline LeaderBroadcastState& State()
+		inline TLeaderState& State()
 		{
 			return m_pShared->leaderState;
 		}
 
 		// Reads a consistent snapshot of the leader's broadcast state.
-		inline bool PollState(LeaderBroadcastState& outState)
+		inline bool PollState(TLeaderState& outState)
 		{
 			if (!m_pShared)
 			{
@@ -448,7 +450,7 @@ namespace HydraIPC
 			do
 			{
 				nSeq = Seqlock::BeginRead(state.sequence);
-				memcpy(&outState, (const void*)&state, sizeof(LeaderBroadcastState));
+				memcpy(&outState, (const void*)&state, sizeof(TLeaderState));
 			} while (!Seqlock::ValidateRead(state.sequence, nSeq) && ++nRetries < 100);
 
 			return nRetries < 100;
@@ -718,59 +720,59 @@ namespace HydraIPC
 
 		inline void UpdateSpeed(float fSpeed)
 		{
-			PeerSlot* pSlot = GetMySlot();
+			auto* pSlot = GetMySlot();
 			if (pSlot)
 			{
-				pSlot->speed = fSpeed;
+				pSlot->state.speed = fSpeed;
 			}
 		}
 
 		inline void UpdateObjectId(int32_t nObjectId)
 		{
-			PeerSlot* pSlot = GetMySlot();
+			auto* pSlot = GetMySlot();
 			if (pSlot)
 			{
-				pSlot->objectId = nObjectId;
+				pSlot->state.objectId = nObjectId;
 			}
 		}
 
 		inline void UpdateWorldId(uint32_t uWorldId)
 		{
-			PeerSlot* pSlot = GetMySlot();
+			auto* pSlot = GetMySlot();
 			if (pSlot)
 			{
-				pSlot->worldId = uWorldId;
+				pSlot->state.worldId = uWorldId;
 			}
 		}
 
 		inline void UpdateSlowed(bool bIsSlowed)
 		{
-			PeerSlot* pSlot = GetMySlot();
+			auto* pSlot = GetMySlot();
 			if (pSlot)
 			{
-				InterlockedExchange(&pSlot->isSlowed, bIsSlowed ? 1 : 0);
+				InterlockedExchange(&pSlot->state.isSlowed, bIsSlowed ? 1 : 0);
 			}
 		}
 
 		inline void UpdateConnectedInGame(bool bConnected)
 		{
-			PeerSlot* pSlot = GetMySlot();
+			auto* pSlot = GetMySlot();
 			if (pSlot)
 			{
-				InterlockedExchange(&pSlot->isConnectedInGame, bConnected ? 1 : 0);
+				InterlockedExchange(&pSlot->state.isConnectedInGame, bConnected ? 1 : 0);
 			}
 		}
 
 		inline void UpdateInventory(const int32_t* pInventory, int32_t nCount, int32_t nBackpackSlots)
 		{
-			PeerSlot* pSlot = GetMySlot();
+			auto* pSlot = GetMySlot();
 			if (!pSlot)
 			{
 				return;
 			}
 			int32_t nCopyCount = nCount < 28 ? nCount : 28;
-			memcpy(pSlot->inventory, pInventory, nCopyCount * sizeof(int32_t));
-			pSlot->backpackSlots = nBackpackSlots;
+			memcpy(pSlot->state.inventory, pInventory, nCopyCount * sizeof(int32_t));
+			pSlot->state.backpackSlots = nBackpackSlots;
 		}
 
 #pragma endregion
@@ -810,7 +812,7 @@ namespace HydraIPC
 			return m_pShared->peerCount;
 		}
 
-		// Iterates all connected peers (including self). fn(nSlotIndex, PeerSlot&) -> true to continue.
+		// Iterates all connected peers (including self). fn(nSlotIndex, auto&) -> true to continue.
 		template <typename Fn>
 		inline void ForEachPeer(Fn&& fn)
 		{
@@ -821,7 +823,7 @@ namespace HydraIPC
 
 			for (int i = 0; i < (int)MAX_PEERS; i++)
 			{
-				PeerSlot& slot = m_pShared->peerSlots[i];
+				auto& slot = m_pShared->peerSlots[i];
 				if (slot.connectState != 1)
 				{
 					continue;
@@ -849,7 +851,7 @@ namespace HydraIPC
 				{
 					continue;
 				}
-				PeerSlot& slot = m_pShared->peerSlots[i];
+				auto& slot = m_pShared->peerSlots[i];
 				if (slot.connectState != 1)
 				{
 					continue;
@@ -864,13 +866,13 @@ namespace HydraIPC
 		inline int32_t GetMinPeerSpeed(uint32_t uWorldId)
 		{
 			int32_t nMinSpeed = 1000;
-			ForEachPeer([&](int, PeerSlot& slot) -> bool
+			ForEachPeer([&](int, auto& slot) -> bool
 				{
-					if (slot.worldId != uWorldId)
+					if (slot.state.worldId != uWorldId)
 					{
 						return true;
 					}
-					int32_t nSpeed = (int32_t)slot.speed;
+					int32_t nSpeed = (int32_t)slot.state.speed;
 					if (nSpeed == 0)
 					{
 						nSpeed = 10;
@@ -887,9 +889,9 @@ namespace HydraIPC
 		inline bool IsAnyPeerSlowed(uint32_t uWorldId)
 		{
 			bool bSlowed = false;
-			ForEachPeer([&](int, PeerSlot& slot) -> bool
+			ForEachPeer([&](int, auto& slot) -> bool
 				{
-					if (slot.worldId == uWorldId && slot.isSlowed)
+					if (slot.state.worldId == uWorldId && slot.state.isSlowed)
 					{
 						bSlowed = true;
 						return false;
@@ -902,12 +904,12 @@ namespace HydraIPC
 		inline void SnakeFollow(int32_t nServerObjectId)
 		{
 			int32_t nPrevObjectId = nServerObjectId;
-			ForEachFollower([&](int nSlotIndex, PeerSlot& slot) -> bool
+			ForEachFollower([&](int nSlotIndex, auto& slot) -> bool
 				{
 					Cmd::FollowTarget cmdFollowTarget;
 					cmdFollowTarget.nObjectId = nPrevObjectId;
 					Send(CmdFollowTarget, cmdFollowTarget, TargetSlot(nSlotIndex));
-					nPrevObjectId = slot.objectId;
+					nPrevObjectId = slot.state.objectId;
 					return true;
 				});
 		}
@@ -924,7 +926,7 @@ namespace HydraIPC
 			}
 			for (int i = 0; i < (int)MAX_PEERS; i++)
 			{
-				PeerSlot& slot = m_pShared->peerSlots[i];
+				auto& slot = m_pShared->peerSlots[i];
 				if (slot.connectState != 1)
 				{
 					continue;
@@ -961,5 +963,5 @@ namespace HydraIPC
 			}
 		}
 #pragma endregion
-	}
+	};
 }

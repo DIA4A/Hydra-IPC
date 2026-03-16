@@ -145,29 +145,8 @@ namespace HydraIPC
 		uint8_t  payload[MAX_PAYLOAD_SIZE];
 	};
 
-	struct alignas(64) LeaderBroadcastState
-	{
-		volatile long sequence; // seqlock: odd = writing, even = stable
 
-		float posX, posY;
-
-		bool shouldShoot;
-		float shootX, shootY;
-
-		uint32_t leaderWorldId;
-		char leaderServerAddress[64];
-		int32_t leaderObjectId;
-		char leaderName[64];
-		bool allowCrossWorldConnections;
-
-		bool bShouldRequestTome = false;
-		float flRequestTomeThreshold = 0.f;
-		bool bNotifyBagTypes[6] = {};
-		bool bShowBagContents = false;
-		bool bInteract = false;
-		int32_t nOptimizationMode = 0;
-	};
-
+	template <typename TPeerState>
 	struct alignas(64) PeerSlot
 	{
 		// Registration (set on Join, cleared on Leave)
@@ -175,16 +154,9 @@ namespace HydraIPC
 		uint32_t processId;
 		uint32_t apcThreadId;
 		uintptr_t apcCallbackAddr; // Address of APCCallback in this process
-
-		// Peer state (updated each tick, read by leader/others)
-		float speed;
-		int32_t objectId;
-		uint32_t worldId;
-		volatile long isSlowed;
-		volatile long isConnectedInGame;
 		char name[20];
-		int32_t inventory[28];
-		int32_t backpackSlots;
+
+		TPeerState state;
 	};
 
 	struct CommandRingBuffer
@@ -193,6 +165,7 @@ namespace HydraIPC
 		CommandEntry entries[COMMAND_RING_SIZE];
 	};
 
+	template <typename TLeaderState, typename TPeerState>
 	struct SharedMemoryLayout
 	{
 		uint32_t magic;
@@ -201,8 +174,8 @@ namespace HydraIPC
 		volatile long leaderSlot;
 		volatile long peerCount;
 
-		alignas(64) LeaderBroadcastState leaderState;
-		alignas(64) PeerSlot peerSlots[MAX_PEERS];
+		alignas(64) TLeaderState leaderState;
+		alignas(64) PeerSlot<TPeerState> peerSlots[MAX_PEERS];
 		alignas(64) CommandRingBuffer commandRing;
 	};
 
