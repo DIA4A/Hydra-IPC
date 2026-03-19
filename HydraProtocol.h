@@ -42,98 +42,11 @@ namespace HydraIPC
 	enum CommandType : uint32_t
 	{
 		CmdNone = 0,
-		CmdNexus,
-		CmdUsePortal,
-		CmdCurrentWorld,
-		CmdIngameDisconnect,
-		CmdForceNexus,
-		CmdChangeServer,
-		CmdServerIPConnect,
-		CmdUnplug,
-		CmdLoadConfig,
-		CmdRunCommand,
-		CmdChatMessage,
-		CmdFollowTarget,
-		CmdRequestTome,
-		CmdSwapout,
-		CmdUseAbility,
-		CmdInformObjectId,
-		CmdBagDrop,
-
-		CmdUserDefined = 0x1000,
+		CmdUserDefined = 0x100,
 	};
 
-	namespace Cmd
-	{
-		struct UsePortal
-		{
-			int32_t nObjectId = 0;
-		};
 
-		struct CurrentWorld
-		{
-			uint32_t uWorldId = 0;
-		};
 
-		struct ChangeServer
-		{
-			int32_t nServerIndex = 0;
-		};
-
-		struct ServerIPConnect
-		{
-			char szServerIP[64] = {};
-		};
-
-		struct Unplug
-		{
-			bool bEnable = false;
-		};
-
-		struct LoadConfig
-		{
-			int32_t nConfigIndex = 0;
-		};
-
-		struct RunCommand
-		{
-			char szCommand[512] = {};
-		};
-
-		struct ChatMessage
-		{
-			char szMessage[256] = {};
-		};
-
-		struct FollowTarget
-		{
-			int32_t nObjectId = 0;
-		};
-
-		struct Swapout
-		{
-			int32_t nSwapToObjectType = -1;
-		};
-
-		struct InformObjectId
-		{
-			int32_t nObjectId = 0;
-		};
-
-		struct UseAbility
-		{
-			float flX = 0.f;
-			float flY = 0.f;
-		};
-
-		struct BagDrop
-		{
-			int32_t nBagType;
-			int32_t nBagObjectType;
-			int32_t nItems[8];
-			float flX, flY;
-		};
-	}
 
 	struct CommandEntry
 	{
